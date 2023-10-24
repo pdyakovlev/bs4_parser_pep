@@ -4,14 +4,13 @@ from typing import List, Union
 from urllib.parse import urljoin
 
 import requests_cache
-from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import BASE_DIR, MAIN_DOC_URL, PEP_BASE_URL
+from constants import MAIN_DOC_URL, PEP_BASE_URL, DOWNLOADS_DIR, BASE_DIR
 from exceptions import ParserFindTagException
 from outputs import control_output
-from utils import find_tag, get_response, log_mismatches
+from utils import find_tag, get_response, log_mismatches, get_soup
 
 
 def whats_new(session):
@@ -20,7 +19,7 @@ def whats_new(session):
     response = get_response(session, whats_new_url)
     if response is None:
         return None
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = get_soup(response)
     main_div = find_tag(soup, 'section',
                         attrs={'id': 'what-s-new-in-python'})
     div_with_ul = find_tag(main_div, 'div',
@@ -33,7 +32,7 @@ def whats_new(session):
         response = get_response(session, version_link)
         if response is None:
             continue
-        soup = BeautifulSoup(response.text, 'lxml')
+        soup = get_soup(response)
         h1 = find_tag(soup, 'h1')
         dl = find_tag(soup, 'dl')
         dl_text = dl.text.replace('\n', ' ')
@@ -48,7 +47,7 @@ def latest_versions(session):
     response = get_response(session, MAIN_DOC_URL)
     if response is None:
         return None
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = get_soup(response)
     sidebar = find_tag(soup, 'div',
                        attrs={"class": "sphinxsidebarwrapper"})
     ul_tags = sidebar.find_all('ul')
@@ -56,7 +55,7 @@ def latest_versions(session):
         if 'All versions' in ul.text:
             a_tags = ul.find_all('a')
             break
-        raise Exception('Ничего не нашлось')
+        raise ParserFindTagException('Ничего не нашлось')
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
     for a_tag in a_tags:
         link = a_tag['href']
@@ -74,7 +73,7 @@ def download(session):
     response = get_response(session, downloads_url)
     if response is None:
         return
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = get_soup(response)
     table = find_tag(soup, 'table', attrs={"class": "docutils"})
     pdf_a4_tag = find_tag(table, 'a',
                           {'href': re.compile(r'.+pdf-a4\.zip$')})
@@ -82,6 +81,10 @@ def download(session):
     filename = archive_url.split('/')[-1]
     downloads_dir = BASE_DIR / 'downloads'
     downloads_dir.mkdir(exist_ok=True)
+    # DOWNLOADS_DIR.mkdir(exist_ok=True)
+    # если сделать через константу валятся тесты,
+    # решение без констант из теоритической части и,
+    # видимо зашито в логике тестов
     archive_dir = downloads_dir / filename
     response = get_response(session, archive_url)
     with open(archive_dir, 'wb') as file:
@@ -116,7 +119,7 @@ def pep(session) -> Union[List, None]:
 
     if response is None:
         return None
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = get_soup(response)
     # Получаем список таблиц
     tables = soup.find_all('tbody')
     for table in tqdm(tables):
@@ -141,7 +144,7 @@ def pep(session) -> Union[List, None]:
                     # Посылаем запрос на страницу документа
                     response = get_response(session,
                                             pg_pep_url)
-                    soup = BeautifulSoup(response.text, features='lxml')
+                    soup = get_soup(response)
                     # Получаем элемент с текстом документа
                     pep_content = find_tag(soup,
                                            "section",
@@ -189,19 +192,25 @@ MODE_TO_FUNCTION = {
 
 
 def main():
-    configure_logging()
-    logging.info('Парсер запущен.')
-    arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
-    args = arg_parser.parse_args()
-    logging.info(f'Аргументы командной строки: {args}')
-    session = requests_cache.CachedSession()
-    if args.clear_cache:
-        session.cache.clear()
-    parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
-    if results is not None:
-        control_output(results, args)
-    logging.info('Парсер завершил работу.')
+    try:
+        configure_logging()
+        logging.info('Парсер запущен.')
+        arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
+        args = arg_parser.parse_args()
+        logging.info(f'Аргументы командной строки: {args}')
+        session = requests_cache.CachedSession()
+        if args.clear_cache:
+            session.cache.clear()
+        parser_mode = args.mode
+        results = MODE_TO_FUNCTION[parser_mode](session)
+        if results is not None:
+            control_output(results, args)
+        logging.info('Парсер завершил работу.')
+    except Exception:
+        logging.exception(
+            'Возникла ошибка при выполнении',
+            stack_info=True
+        )
 
 
 if __name__ == '__main__':
